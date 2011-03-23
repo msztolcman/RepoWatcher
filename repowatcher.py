@@ -356,6 +356,10 @@ class RepoWatcherCommands:
             print ('Add some repo!', file=sys.stderr)
             return 1
 
+        pidfile = PidFile (PIDFILE)
+        if pidfile.is_locked ():
+            raise Exception ('Daemon already started')
+
         ctx = daemon.DaemonContext ()
         ctx.detach_process  = True
         ctx.pidfile         = PidFile (PIDFILE)
