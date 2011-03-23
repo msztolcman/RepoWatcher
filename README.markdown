@@ -13,15 +13,15 @@ Repositories watcher. Version very-very-very alpha, but generally stable ;)
 
 # Available commands:
 
-* add - add repo to watching list
-* clear - remove all repos
-* delete - delete single repo (by name or uri)
-* reload - not implemented yet
-* rename - rename repo
-* start - start daemon
-* status - list all repos
-* stop - stop daemon
-* update - update single repo
+* **add** - add repo to watching list
+* **clear** - remove all repos
+* **delete** - delete single repo (by name or uri)
+* **reload** - not implemented yet
+* **rename** - rename repo
+* **start** - start daemon
+* **status** - list all repos
+* **stop** - stop daemon
+* **update** - update single repo
 
 # Copyright:
 (c) 2011, Marcin Sztolcman
