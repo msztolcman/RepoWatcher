@@ -205,36 +205,56 @@ class RepoWatcherGit (RepoWatcherVCS):
 
 class PidFile (object):
     __default_err = dict (
-        process_exists = 'Process %(pid)d already exists!'
+        process_exists = 'Process %(pid)d already exists'
+        strange_pid = 'Pid file contains invalud data: %(pid)s'
     )
 
     def __init__ (self, path, err=None):
         self.path = path
+        self._invalid_pid = None
 
         if err is None:
             self.err = self.__default_err
 
-    def __enter__ (self):
-        if os.path.exists (self.path):
-            with open (self.path, 'r') as fh:
-                try:
-                    pid = int (fh.readline ().strip ())
-                    os.kill (pid, 0)
-                except OSError:
-                    os.unlink (self.path)
-                else:
-                    raise RuntimeError (self.err['process_exists'] % dict (pid = pid))
+    def is_locked (self):
+        if not os.path.exists (self.path):
+            return False
+
+        with open (self.path, 'r') as fh:
+            try:
+                data = fh.readline ().strip ()
+                pid = int (data)
+                os.kill (pid, 0)
+            except OSError:
+                os.unlink (self.path)
+                return False
+            except ValueError:
+                self._invalid_pid = data
+                raise RuntimeError (self.err['process_strange_pid'] % dict (pid = data))
+            else:
+                return True
+
+    def acquire (self):
+        if self.is_locked ():
+            raise RuntimeError (self.err['process_exists'] % dict (pid = self._invalid_pid))
 
         with open (self.path, 'w') as fh:
             print (os.getpid (), file=fh)
 
-        return self
+        return True
 
-    def __exit__ (self, *exc_info):
+    def release (self):
         try:
             os.unlink (self.path)
         except:
             pass
+
+    def __enter__ (self):
+        self.acquire ()
+        return self
+
+    def __exit__ (self, *exc_info):
+        self.release ()
 
 class RepoWatcherCommands:
     @staticmethod
