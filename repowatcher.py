@@ -66,10 +66,6 @@ class RepoWatcherVCS (object):
 
         self.cfg = cfg
 
-    @staticmethod
-    def name_safe (repo_name):
-        return repo_name.replace (':', '_').replace ('=', '_')
-
     def get_repo_by_name (self, repo):
         if repo in self.cfg.repos:
             return self.cfg.repos[repo]
