@@ -61,60 +61,64 @@ class GrowlNotify (Growl.GrowlNotifier):
 
 class RepoWatcherVCS (object):
     def __init__ (self, cfg):
-        if not isinstance (cfg, ConfigParser.ConfigParser):
+        if not isinstance (cfg, RepoWatcherConfig):
             raise ConfigError ('Unknown configuration reader')
 
         self.cfg = cfg
 
     @staticmethod
-    def hash (repo):
-        return hashlib.md5 (repo).hexdigest ()
-
-    @staticmethod
     def name_safe (repo_name):
         return repo_name.replace (':', '_').replace ('=', '_')
 
-    def name_normalize (self, repo):
-        repo_name = repo_uri = None
+    def get_repo_by_name (self, repo):
+        if repo in self.cfg.repos:
+            return self.cfg.repos[repo]
+        return None
 
-        ## if user give us repo name
-        _repo = self.name_safe (repo)
-        if self.cfg.has_option (self.cfg.SECTION_REPO, _repo):
-            repo_uri    = self.cfg.get (self.cfg.SECTION_REPO, _repo)
-            repo_name   = _repo
+    def get_repo_by_uri (self, repo):
+        for r in self.cfg.repos.values ():
+            if r['uri'] == repo:
+                return r
+        return None
 
-        ## or maybe repo uri...
-        else:
-            repo_uri = repo
-            for k, v in self.cfg.items (self.cfg.SECTION_REPO):
-                if v == repo:
-                    repo_name = k
-                    break
+    def get_repo (self, repo):
+        repo_data = self.get_repo_by_name (repo)
+        if not repo_data:
+            repo_data = self.get_repo_by_uri (repo)
 
-            if repo_name is None:
-                repo_name = self.name_safe (repo_uri)
+        if not repo_data:
+            raise Exception ('Repo %s doesn\'t exists' % repo)
 
-        return repo_name, repo_uri
+        repo_path   = self.get_repo_path_by_hash (repo_data)
+
+        if not os.path.exists (repo_path):
+            raise Exception ('Repo %s doesn\'t exists' % repo)
+
+        return repo_data
+
+    def get_repo_hash (self, repo_uri):
+        return hashlib.sha1 (repo_uri).hexdigest ()
+
+    def get_repo_path_by_hash (self, repo):
+        return os.path.join (APP_DIR, repo['hash'])
+
+    def get_repo_path_by_uri (self, repo_uri):
+            return os.path.join (APP_DIR, self.get_repo_hash (repo_uri))
+
+    def get_list (self):
+        return self.cfg.repos
+
+class RepoWatcherSvn (RepoWatcherVCS):
+    pass
 
 class RepoWatcherGit (RepoWatcherVCS):
-    def get_list (self):
-        if not isinstance (self.cfg, ConfigParser.SafeConfigParser):
-            raise Exception ('No valid configuration found!')
-
-        if not self.cfg.has_section (self.cfg.SECTION_REPO):
-            self.cfg.add_section (self.cfg.SECTION_REPO)
-            return dict ()
-
-        return dict (self.cfg.items (self.cfg.SECTION_REPO))
-
-    def create (self, repo_name, repo_uri):
-        repo_name = self.name_safe (repo_name)
-
-        if self.cfg.has_option (self.cfg.SECTION_REPO, repo_name):
+    def create (self, repo_name, repo_uri, repo_type=None):
+        if self.get_repo_by_name (repo_name) or\
+                self.get_repo_by_uri (repo_uri):
             raise Exception ('Repo %s already exists' % repo_name)
 
-        repo_hash   = self.hash (repo_uri)
-        repo_path   = os.path.join (APP_DIR, repo_hash)
+        repo_hash   = self.get_repo_hash (repo_uri)
+        repo_path   = self.get_repo_path_by_uri (repo_uri)
 
         if os.path.exists (repo_path):
             raise Exception ('Folder for repo %s (%s): %s already exists, remove directory and try again' % (repo_name, repo_uri, repo_path, ))
@@ -127,40 +131,29 @@ class RepoWatcherGit (RepoWatcherVCS):
             self.delete (repo_name)
             raise Exception ('Error cloning repo %s: [%s] %s' % (repo_uri, retcode, stderr))
 
-        self.cfg.set (self.cfg.SECTION_REPO, repo_name, repo_uri)
-
         retcode, stdout, stderr = system (['git', 'log', '-1'], repo_path)
         sha1 = stdout.splitlines ()[0].split ()[1]
-        self.cfg.set (self.cfg.SECTION_REVS, repo_name, sha1)
 
-        return repo_name
+        self.cfg.repos[repo_name] = dict (
+            name        = repo_name,
+            type        = repo_type,
+            uri         = repo_uri,
+            last_rev    = sha1,
+            hash        = repo_hash,
+        )
+
+        return True
 
     def delete (self, repo):
-        repo_name, repo_uri = self.name_normalize (repo)
-
-        hash   = self.hash (repo_uri)
-        repo_path   = os.path.join (APP_DIR, hash)
-
-        if not os.path.exists (repo_path):
-            raise Exception ('Repo %s doesn\'t exists' % repo)
-
-        shutil.rmtree (repo_path)
-
-        if self.cfg.has_option (self.cfg.SECTION_REPO, repo_name):
-            self.cfg.remove_option (self.cfg.SECTION_REPO, repo_name)
-        if self.cfg.has_option (self.cfg.SECTION_REVS, repo_name):
-            self.cfg.remove_option (self.cfg.SECTION_REVS, repo_name)
+        repo = self.get_repo (repo)
+        shutil.rmtree (self.get_repo_path_by_hash (repo))
+        del self.cfg.repos[repo['name']]
 
         return True
 
     def update (self, repo):
-        repo_name, repo_uri = self.name_normalize (repo)
-
-        repo_hash   = self.hash (repo_uri)
-        repo_path   = os.path.join (APP_DIR, repo_hash)
-
-        if not self.cfg.has_option (self.cfg.SECTION_REPO, repo_name):
-            raise Exception ('Repo %s doesn\'t exists' % repo)
+        repo        = self.get_repo (repo)
+        repo_path   = self.get_repo_path_by_hash (repo)
 
         retcode, stdout, stderr = system (['git', 'pull'], repo_path)
 
@@ -170,7 +163,7 @@ class RepoWatcherGit (RepoWatcherVCS):
         match = re.match (r'Updating ([a-f\d]+)\.\.([a-f\d]+)', stdout)
         if match:
             r_beg, r_end = match.groups ()
-            self.cfg.set (self.cfg.SECTION_REVS, repo_name, r_end)
+            repo['last_rev'] = r_end
             return (r_beg, r_end, )
         elif stdout.startswith ('Already up-to-date'):
             return True
@@ -178,21 +171,19 @@ class RepoWatcherGit (RepoWatcherVCS):
             return False
 
     def rename (self, repo_old, repo_new):
-        if not self.cfg.has_option (self.cfg.SECTION_REPO, repo_old):
+        repo_data = self.get_repo_by_name (repo_old)
+        if not repo_data:
             raise Exception ('Repo %s doesn\'t exists' % repo_old)
 
-        for section in (self.cfg.SECTION_REPO, self.cfg.SECTION_REVS, ):
-            repo_data = self.cfg.get (section, repo_old)
-            self.cfg.remove_option (section, repo_old)
-            self.cfg.set (section, repo_new, repo_data)
+        if self.get_repo_by_name (repo_new):
+            raise Exception ('Repo %s already exists' % repo_new)
 
+        repo_data['name'] = repo_new
         return True
 
     def info (self, repo, r1, r2):
-        repo_name, repo_uri = self.name_normalize (repo)
-
-        hash   = self.hash (repo_uri)
-        repo_path   = os.path.join (APP_DIR, hash)
+        repo        = self.get_repo (repo)
+        repo_path   = self.get_repo_path_by_hash (repo)
 
         retcode, stdout, stderr     = system (['git', 'log', '-1', '--summary', '--pretty', '%s..%s' % (r1, r2, )], repo_path)
         sha1, author, date, body    = stdout.split ("\n", 3)
@@ -205,8 +196,8 @@ class RepoWatcherGit (RepoWatcherVCS):
 
 class PidFile (object):
     __default_err = dict (
-        process_exists = 'Process %(pid)d already exists'
-        strange_pid = 'Pid file contains invalud data: %(pid)s'
+        process_exists = 'Process %(pid)d already exists',
+        strange_pid = 'Pid file contains invalud data: %(pid)s',
     )
 
     def __init__ (self, path, err=None):
@@ -256,6 +247,67 @@ class PidFile (object):
     def __exit__ (self, *exc_info):
         self.release ()
 
+class RepoWatcherConfig (object):
+    repo_types = dict (
+        git = RepoWatcherGit,
+        svn = RepoWatcherSvn,
+    )
+
+    def __init__ (self, path):
+        ## read configuration
+        cfg = ConfigParser.SafeConfigParser ()
+        cfg.optionxform = str
+        cfg.read (path)
+
+        if not cfg.has_section ('general'):
+            cfg.add_section ('general')
+        if not cfg.has_option ('general', 'interspace'):
+            cfg.set ('general', 'interspace', '600')
+
+        self.cfg    = cfg
+        self.path   = path
+        self.repos  = dict ()
+        self.load ()
+
+    def load (self):
+        for k, v in self.cfg.items ('general'):
+            setattr (self, k, v)
+
+        repos = self.cfg.sections ()
+        repos.remove ('general')
+        for repo in repos:
+            repo_type, repo_name = repo.split (':', 1)
+            if repo_type not in self.repo_types:
+                raise ValueError ('Unknown repository type: %s (%s)' % (repo_type, repo, ))
+
+            self.repos[repo_name] = dict (
+                name        = repo_name,
+                type        = repo_type,
+                uri         = self.cfg.get (repo, 'uri'),
+                last_rev    = self.cfg.get (repo, 'last_rev'),
+                hash        = self.cfg.get (repo, 'hash'),
+            )
+
+        return len (self.repos)
+
+    def save (self):
+        cfg = ConfigParser.SafeConfigParser ()
+        cfg.optionxform = str
+        cfg.add_section ('general')
+        for k, v in self.cfg.items ('general'):
+            cfg.set ('general', k, v)
+
+        for repo in self.repos.values ():
+            section = '%s:%s' % (repo['type'], repo['name'], )
+            cfg.add_section (section)
+            for k, v in repo.items ():
+                if k == 'name':
+                    continue
+                cfg.set (section, str (k), str (v))
+
+        with open (self.path, 'w') as fh:
+            cfg.write (fh)
+
 class RepoWatcherCommands:
     @staticmethod
     def add (pg, argv=None):
@@ -268,9 +320,8 @@ class RepoWatcherCommands:
         else:
             repo_name = repo_uri
 
-        repo_name = pg.create (repo_name, repo_uri)
-        if repo_name:
-            print ('Repository %s added as %s.' % (repo_uri, repo_name))
+        if pg.create (repo_name, repo_uri, 'git'):
+            print ('Repository %s added as %s.' % (repo_uri, repo_name, ))
 
     @staticmethod
     def clear (pg, argv=None):
@@ -285,7 +336,8 @@ class RepoWatcherCommands:
             print ('No repo given', file=sys.stderr)
             return 1
 
-        pg.delete (argv[0])
+        if pg.delete (argv[0]):
+            print ('Repository %s removed.' % argv[0])
 
     @staticmethod
     def reload (pg, argv=None):
@@ -328,23 +380,9 @@ class RepoWatcherCommands:
             growl.register ()
 
             while True:
-#                 print (time.strftime ('%Y-%m-%d %H:%M:%S: ', time.localtime ()))
                 for repo in pg.get_list ():
-#                     print ('repo: %s' % repo, end='')
-                    repo_data    = pg.update (repo)
-#                     print (', data: ' + str (repo_data), end='')
-                    if isinstance (repo_data, tuple):
-#                         print (', notify', end='')
-                        data    = pg.info (repo, *repo_data)
-                        title   = 'RepoWatcher - %s' % repo
-                        body    = "%(author)s\n%(date)s\n%(body)s" % data
-
-                        growl.notify ('notify', title, body)
-#                     print ()
-                    sys.stdout.flush ()
-
-#                 print ('going sleep for %s' % pg.cfg.get (pg.cfg.SECTION_GENERAL, 'interspace'))
-                time.sleep (int (pg.cfg.get (pg.cfg.SECTION_GENERAL, 'interspace')))
+                    RepoWatcherCommands.update (pg, [repo, ], growl)
+                time.sleep (int (pg.cfg.interspace))
 
     @staticmethod
     def status (pg, argv=None):
@@ -353,9 +391,9 @@ class RepoWatcherCommands:
         repos_names = repos.keys ()
         repos_names.sort ()
         for repo_name in repos_names:
-            print ('%s = %s' % (repo_name, repos[repo_name]), end='')
+            print ('%s = %s' % (repo_name, repos[repo_name]['uri']), end='')
             if verbose:
-                print (' (%s)' % os.path.join (APP_DIR, pg.hash (repos[repo_name])))
+                print (' (%s)' % pg.get_repo_path_by_hash (repos[repo_name]))
             else:
                 print ()
 
@@ -374,21 +412,26 @@ class RepoWatcherCommands:
             print ('RepoWatcher doesn\'t run.', file=sys.stderr)
 
     @staticmethod
-    def update (pg, argv=None):
+    def update (pg, argv=None, growl=None):
         if not argv:
             print ('No repo given', file=sys.stderr)
             return 1
 
-        repo    = pg.update (argv[0])
-        repo_name, repo_uri = pg.name_normalize (argv[0])
+        repo = argv[0]
+        revs    = pg.update (repo)
+        if isinstance (revs, tuple):
+            data    = pg.info (repo, *revs)
+            title   = 'RepoWatcher - %s' % repo
+            body    = "%(author)s\n%(date)s\n%(body)s" % data
 
-        data    = pg.info (repo_name, *repo)
-        title   = '%s - %s' % (pg.__class__.__name__, repo_name, )
-        body    = "%(author)s\n%(date)s\n%(body)s" % data
-
-        growl = GrowlNotify ()
-        growl.register ()
-        growl.notify ('git_log', title, body)
+            if not growl:
+                growl = GrowlNotify ()
+                growl.register ()
+            growl.notify ('notify', title, body)
+        elif revs:
+            print ('Repository %s already up to date.' % repo)
+        else:
+            print ('Some error occured')
 
 
 def main ():
@@ -402,7 +445,7 @@ def main ():
     else:
         cmd     = 'status'
 
-    ## set up application environment
+    ## test application environment
     if not os.path.exists (APP_DIR):
         os.mkdir (APP_DIR)
     elif not os.path.isdir (APP_DIR):
@@ -410,27 +453,9 @@ def main ():
     elif not os.access (APP_DIR, os.W_OK):
         raise Exception (APP_DIR + ' is not writable')
 
+    cfg = None
     try:
-        ## read configuration
-        cfg = ConfigParser.SafeConfigParser ()
-
-        cfg.optionxform = str
-        cfg.SECTION_REPO = 'repositories'
-        cfg.SECTION_REVS = 'revisions'
-        cfg.SECTION_GENERAL = 'general'
-
-        if os.path.exists (INI_FILE):
-            cfg.read (INI_FILE)
-
-        ## ensure there are required sections
-        if not cfg.has_section (cfg.SECTION_REPO):
-            cfg.add_section (cfg.SECTION_REPO)
-        if not cfg.has_section (cfg.SECTION_REVS):
-            cfg.add_section (cfg.SECTION_REVS)
-        if not cfg.has_section (cfg.SECTION_GENERAL):
-            cfg.add_section (cfg.SECTION_GENERAL)
-        if not cfg.has_option (cfg.SECTION_GENERAL, 'interspace'):
-            cfg.set (cfg.SECTION_GENERAL, 'interspace', '600')
+        cfg = RepoWatcherConfig (INI_FILE)
 
         ## try to execute user's command
         pg = RepoWatcherGit (cfg)
@@ -446,9 +471,8 @@ def main ():
         else:
             sys.exit (0)
     finally:
-        ## always save new configuration!
-        with open (INI_FILE, 'w') as fh:
-            cfg.write (fh)
+        if cfg:
+            cfg.save ()
 
 if __name__ == '__main__':
     main ()
