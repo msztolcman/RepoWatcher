@@ -27,7 +27,7 @@ Repositories watcher. Version very-very-very alpha, but generally stable ;)
 (c) 2011, Marcin Sztolcman
 
 # License:
-The GNU Lesser General Public License, version 3.0 (LGPLv3) (http://opensource.org/licenses/lgpl-3.0.html). 
+[The GNU Lesser General Public License, version 3.0 (LGPLv3)](http://opensource.org/licenses/lgpl-3.0.html). 
 
 Contact with me, if you need other license.
 
