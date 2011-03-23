@@ -1,15 +1,18 @@
 Repositories watcher. Version very-very-very alpha, but generally stable ;)
 
 Current restrictions:
+
 * for mac only - Growl is required
 * git repos only (other VCS in future)
 
 Requirements:
+
 * [Growl](http://growl.info/)
 * Growl python module from Growl
 * [python-daemon library](http://www.python.org/dev/peps/pep-3143/)
 
 Available commands:
+
 * add - add repo to watching list
 * clear - remove all repos
 * delete - delete single repo (by name or uri)
