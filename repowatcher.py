@@ -285,7 +285,7 @@ class RepoWatcherCommands:
     @staticmethod
     def start (pg, argv=None):
         if not pg.get_list ():
-            print ('Add some repo!', file=sys.syderr)
+            print ('Add some repo!', file=sys.stderr)
             return 1
 
         ctx = daemon.DaemonContext ()
