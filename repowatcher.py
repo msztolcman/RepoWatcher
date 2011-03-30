@@ -243,6 +243,9 @@ class PidFile (object):
     def __exit__ (self, *exc_info):
         self.release ()
 
+class RepoWatcher (object):
+    pass
+
 class RepoWatcherConfig (object):
     repo_types = dict (
         git = RepoWatcherGit,
@@ -382,6 +385,8 @@ class RepoWatcherCommands:
             while True:
                 for repo in pg.get_list ():
                     RepoWatcherCommands.update (pg, [repo, ], growl)
+                    sys.stderr.flush ()
+                    sys.stdout.flush ()
                 time.sleep (int (pg.cfg.interspace))
 
     @staticmethod
