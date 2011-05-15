@@ -481,3 +481,72 @@ def main ():
 
 if __name__ == '__main__':
     main ()
+
+'''
+class Repository (object):
+    def __init__ (self, repo=None):
+        if repo is None:
+            repo = dict (
+                name = '',
+                hash = '',
+                last_rev = '',
+                type = '',
+                uri = '',
+            )
+
+        self._repo = repo
+
+        self.name = repo'name']
+        self.hash = repo['hash']
+        self.last_rev = repo['last_rev']
+        self.type = repo['type']
+        self.uri = repo['uri']
+
+    @property
+    def name (self):
+        return self._repo['name']
+
+    @name.setter
+    def name (self, value):
+        self._repo['name'] = value
+
+    @property
+    def hash (self):
+        return self._repo['hash']
+
+    @property
+    def last_rev (self):
+        return self._repo['last_rev']
+
+    @last_rev.setter
+    def last_rev (self, value):
+        self._repo['last_rev'] = value
+
+    @property
+    def type (self):
+        return self._repo['type']
+
+    @type.setter
+    def type (self, value):
+        self._repo['type'] = value
+
+    @property
+    def uri (self):
+        return self._repo['uri']
+
+    @uri.setter
+    def uri (self, value):
+        self._repo['uri'] = value
+        self._repo['hash'] = hashlib.sha1 (value).hexdigest ()
+
+    @property
+    def path (self):
+        return os.path.join (self.ROOT_DIR, self.hash)
+
+    @property
+    def is_new (self):
+        return os.path.exists (self.path)
+
+    def save (self):
+        pass
+'''
