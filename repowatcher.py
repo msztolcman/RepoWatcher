@@ -1,16 +1,43 @@
 #!/usr/bin/env python2.6 -tt
 # -*- coding: utf-8 -*-
 
-from __future__ import print_function, unicode_literals
 import hashlib
 import json
 import os, os.path
 import re
+import shutil
 import sys
 import subprocess
+import time
 
 class RWError (Exception): pass
 class RWErrConfig (RWError): pass
+class RWErrRepoType (RWError): pass
+
+def program ():
+    """ Return current program name """
+    return os.path.basename (sys.argv[0])
+
+def system (*args, cwd=None, stdin=None):
+    """ Execute extrenal command and return data
+        Input:
+            list of parameters to execute (see: subprocess.Popen (), argument args)
+            cwd - if given, change current working directory to this (see: subprocess.Popen (), argument cwd)
+            stdin - if given, go to executed program to its STDIN
+        Output:
+            ret_code - return code
+            stdout - stdout from executed program
+            stderr - stderr from executed program"""
+    if stdin is not None:
+        _stdin = subprocess.PIPE
+        stdin = stdin.encode ('UTF-8')
+    else:
+        _stdin = None
+
+    p = subprocess.Popen (args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=_stdin, cwd=cwd, )
+
+    stdout, stderr = p.communicate (stdin)
+    return p.returncode, stdout.decode ('UTF-8'), stderr.decode ('UTF-8')
 
 class ProjectPath (object):
     def __init__ (self, root_dir=None, create=True):
@@ -48,68 +75,122 @@ class ProjectPath (object):
         return unicode (self.path)
 
 class RWRepo (object):
-    @classmethod
-    def make_hash (data):
-        return hashlib.sha1 (data['uri']).hexdigest ()
+    ENABLED = 'enabled'
+    DISABLED = 'disabled'
+
+    properties = ('path', 'type', 'name', 'uri', 'last_rev', 'last_rev_date', 'interval', 'last_check', 'status', 'date_add', )
+
+    @staticmethod
+    def _is_git_by_uri (uri):
+        """ try test uri for being git """
+
+        if uri.startswith ('git://'):
+            return True
+        elif re.match ('^git@github', uri):
+            return True
+        elif re.match ('^https?://\w+@github', uri):
+            return True
+
+        return False
+
+    @staticmethod
+    def _is_svn_by_uri (uri):
+        """ try test uri for being svn """
+
+        if uri.startswith ('svn://'):
+            return True
+
+        return False
+
+    @staticmethod
+    def factory (uri, data=None):
+        if uri in _repository_types:
+            return _repository_types[uri] (data)
+        elif RWRepo._is_git_by_uri (uri):
+            return RWRepoGit (data)
+        elif RWRepo._is_svn_by_uri (uri):
+            return RWRepoSvn (data)
+        else:
+            raise RWErrRepoType ('Unknown repo type for uri: {0}'.format (uri))
+
+    @staticmethod
+    def make_hash (uri):
+        if type (uri) is str:
+            uri = uri.encode ('UTF-8')
+        return hashlib.sha1 (uri).hexdigest ()
 
     def __init__ (self, data=None):
-        if data is not None:
-            self.path       = data['path']
-            self.type       = data['type']
-            self.name       = data['name']
-            self.uri        = data['uri']
-            self.last_rev   = data['last_rev']
-            self.interval   = data.get ('interval', 600)
-            self.last_check = data.get ('last_check', 0)
-            self.status     = data['status']
-            self.date_add   = data['date_add']
-        else:
-            self.path       = None
-            self.type       = None
-            self.name       = None
-            self.uri        = None
-            self.last_rev   = None
-            self.interval   = 600
-            self.last_check = 0
-            self.status     = None
-            self.date_add   = None
+        if data is None:
+            data = dict ()
+
+        for prop in self.properties:
+            setattr (self, prop, data.get (prop, None))
+
+        if self.interval is None:
+            self.interval = 600
+        if self.type is None:
+            self.type = self._type
 
     def __repr__ (self):
         return '<{0}: {1}>'.format (self.__class__.__name__, self.uri)
 
     def __str__ (self):
-        return self.uri
+        return '{0}: {1}'.format ((self.type or 'UNKNOWN'), (self.uri or ''))
 
     def __unicode__ (self):
         return unicode (self.__str__ ())
 
-def system (*args):
-    p = subprocess.Popen (args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    stdout, stderr = p.communicate ()
-    return p.returncode, stdout, stderr
-
 class RWRepoGit (RWRepo):
+    _type = 'git'
+
     def initialize (self):
+        """ Fetch repository copy and create config file for repository """
+
         if os.path.exists (self.path):
             raise RWError ('Repository folder already exists: {0}'.format (self.path))
 
         os.mkdir (self.path)
         os.chdir (self.path)
 
-        ret_code, stdout, stderr = system ('git', 'clone', self.uri)
+        ret_code, stdout, stderr = system ('git', 'clone', self.uri, '.')
         if ret_code:
-            raise RWerror ('Cloning git repo failed: [{0}] {1}'.format (ret_code, stderr))
+            shutil.rmtree (self.path)
+            raise RWError ('Cloning git repo failed: [{0}] {1}'.format (ret_code, stderr))
+
+        ret_code, stdout, stderr = system ('git', 'log', '-1')
+        ret_code += 1
+        if ret_code:
+            shutil.rmtree (self.path)
+            raise RWError ('Cannot read repository log: [{0}] {1}'.format (ret_code, stderr))
+
+        match = re.match (
+            r'''
+                ^
+                commit\s+       (?P<commit>\w+)\n
+                Author:\s+      (?P<author>[^\n]+)\n
+                Date:\s+        (?P<date>
+                                    [^\s]+\s+
+                                    (?P<month>[a-zA-Z]+)\s
+                                    (?P<day>\d+)\s
+                                    (?P<time>[\d:]+)\s
+                                    (?P<year>\d+)
+                                )\s
+            ''',
+            str (stdout),
+            re.VERBOSE
+        )
+        if not match:
+            shutil.rmtree (self.path)
+            raise RWError ('Cannot parse repository log: {0}'.format (stdout))
+
+        self.last_rev = match.group (1)
+        self.last_rev_date = time.mktime (time.strptime (match.group (3)))
+        self.last_check = time.time ()
+        self.date_add = time.time ()
 
         with open (self.path + '_config', 'w') as fh:
             json.dump (dict (
-                type       = self.type,
-                name       = self.name,
-                uri        = self.uri,
-                last_rev   = self.last_rev,
-                interval   = self.interval,
-                last_check = self.last_check,
-                status     = self.status,
-                date_add   = self.date_add,
+                (prop, getattr (self, prop)) for prop in self.properties
             ), fh)
 
     def update (self):
@@ -126,16 +207,6 @@ class RWRepoGit (RWRepo):
 
 class RWRepoSvn (RWRepo):
     pass
-
-repos_types = dict (
-    git = RWRepoGit,
-    svn = RWRepoSvn,
-)
-def repo_factory (data):
-    if data['type'] not in repos_types:
-        raise KeyError ('Unknown repository type: {0}'.format (data['type']))
-
-    return repos_types[data['type']] (data)
 
 class RWRepos (object):
     def __init__ (self, path):
@@ -161,6 +232,11 @@ class RWRepos (object):
                 cfg['hash'] = obj
                 yield repo_factory (cfg)
 
+_repository_types = dict (
+    git = RWRepoGit,
+    svn = RWRepoSvn,
+)
+
 class RWActions:
     def action_start (argv):
         """ starts daemon """
@@ -178,9 +254,30 @@ class RWActions:
         """ disable updates for repo """
         pass
 
-    def action_add (argv):
+    def action_add (path, argv):
         """ add new repo """
-        pass
+
+        try:
+            repo_uri    = argv.pop (0)
+            repo_name   = argv.pop (0)
+            data        = dict (
+                path = os.path.join (path, RWRepo.make_hash (repo_uri)),
+                name = repo_name,
+                uri  = repo_uri,
+                status  = RWRepo.ENABLED,
+            )
+            if len (argv):
+                repo = argv.pop (0)
+                repo = RWRepo.factory (repo, data)
+            else:
+                repo = RWRepo.factory (repo_uri, data)
+
+            repo.initialize ()
+            print ('repo:', repo)
+        except IndexError as e:
+            raise RWError ('Usage: {0} add repo_uri repo_name [repo_type]'.format (program ()))
+        except Exception as e:
+            print ('error:', e.__class__.__name__, e)
 
     def action_rm (argv):
         """ remove repo """
@@ -206,15 +303,24 @@ class RWActions:
         """ show repository info """
         pass
 
-def main ():
-    project_path = ProjectPath (create=True)
-    r = RWRepos (unicode (project_path))
-    for repo in r:
-        if repo.status == 'disabled':
-            continue
+    def action_check (argv):
+        """ check repo for changes """
+        pass
 
-        repo.initialize ()
-#         print ('REPO', repr (repo))
+def main ():
+    try:
+        action, args = sys.argv[1], sys.argv[2:]
+        project_path = ProjectPath (create=True)
+        getattr (RWActions, 'action_' + action) (project_path.path, args)
+    except IndexError as e:
+        print ('Select some action', file=sys.stderr)
+        sys.exit (1);
+    except AttributeError as e:
+        print ('Unknown action: {0}'.format (action), file=sys.stderr)
+        sys.exit (1);
+    except RWError as e:
+        print (e.args[0], file=sys.stderr)
+        sys.exit (2)
 
 if __name__ == '__main__':
     main ()
