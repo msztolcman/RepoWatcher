@@ -158,7 +158,6 @@ class RWRepoGit (RWRepo):
             raise RWError ('Cloning git repo failed: [{0}] {1}'.format (ret_code, stderr))
 
         ret_code, stdout, stderr = system ('git', 'log', '-1')
-        ret_code += 1
         if ret_code:
             shutil.rmtree (self.path)
             raise RWError ('Cannot read repository log: [{0}] {1}'.format (ret_code, stderr))
@@ -279,9 +278,22 @@ class RWActions:
         except Exception as e:
             print ('error:', e.__class__.__name__, e)
 
-    def action_rm (argv):
+    def action_rm (path, argv):
         """ remove repo """
-        pass
+
+        try:
+            repo_name = argv.pop (0)
+        except IndexError as e:
+            raise RWError ('Usage: {0} rm repo_name'.format (program ()))
+
+        repos = RWRepos (path)
+        for repo in repos:
+            if repo.name == repo_name:
+                shutil.rmtree (repo.path)
+                os.remove (repo.path + '_config')
+                print ('Repository {0} [{1}] deleted'.format (repo.name, repo.uri))
+                return True
+
 
     def action_clear (argv):
         """ remove all repos """
