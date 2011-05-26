@@ -230,7 +230,7 @@ class RWRepos (object):
 
                 cfg['path'] = path
                 cfg['hash'] = obj
-                yield repo_factory (cfg)
+                yield RWRepo.factory (cfg['uri'], cfg)
 
 _repository_types = dict (
     git = RWRepoGit,
@@ -287,9 +287,11 @@ class RWActions:
         """ remove all repos """
         pass
 
-    def action_list (argv):
+    def action_list (path, argv):
         """ list repos names and uris"""
-        pass
+        repos = RWRepos (path)
+        for repo in repos:
+            print ('{0} {1} [{2}]'.format (repo.name, repo.uri, repo.status))
 
     def action_reload (argv):
         """ reload daemon """
